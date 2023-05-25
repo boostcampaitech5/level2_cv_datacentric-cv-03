@@ -1,0 +1,8 @@
+._*
+/pths
+.git
+/__pycache__
+/wandb
+/trained_models
+/predictions
+.vscode
