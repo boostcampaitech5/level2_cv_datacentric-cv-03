@@ -1,9 +1,8 @@
 import os.path as osp
 import math
 import json
-from PIL import Image
+from tqdm import tqdm
 
-import torch
 import numpy as np
 import cv2
 import albumentations as A
@@ -208,7 +207,7 @@ def is_cross_text(start_loc, length, vertices):
 def crop_img(img, vertices, labels, length):
     """crop img patches to obtain batch and augment
     Input:
-        img         : PIL Image
+        img         : ndarray
         vertices    : vertices of text regions <numpy.ndarray, (n,8)>
         labels      : 1->valid, 0->ignore, <numpy.ndarray, (n,)>
         length      : length of cropped image region
@@ -216,14 +215,18 @@ def crop_img(img, vertices, labels, length):
         region      : cropped image region
         new_vertices: new vertices in cropped region
     """
-    h, w = img.height, img.width
+    h, w, _ = img.shape
     # confirm the shortest side of image >= length
     if h >= w and w < length:
-        img = img.resize((length, int(h * length / w)), Image.BILINEAR)
+        img = cv2.resize(
+            img, (length, int(h * length / w)), interpolation=cv2.INTER_LINEAR
+        )
     elif h < w and h < length:
-        img = img.resize((int(w * length / h), length), Image.BILINEAR)
-    ratio_w = img.width / w
-    ratio_h = img.height / h
+        img = cv2.resize(
+            img, (int(w * length / h), length), interpolation=cv2.INTER_LINEAR
+        )
+    ratio_w = img.shape[1] / w
+    ratio_h = img.shape[0] / h
     assert ratio_w >= 1 and ratio_h >= 1
 
     new_vertices = np.zeros(vertices.shape)
@@ -232,8 +235,8 @@ def crop_img(img, vertices, labels, length):
         new_vertices[:, [1, 3, 5, 7]] = vertices[:, [1, 3, 5, 7]] * ratio_h
 
     # find random position
-    remain_h = img.height - length
-    remain_w = img.width - length
+    remain_h = img.shape[0] - length
+    remain_w = img.shape[1] - length
     flag = True
     cnt = 0
     while flag and cnt < 1000:
@@ -241,8 +244,7 @@ def crop_img(img, vertices, labels, length):
         start_w = int(np.random.rand() * remain_w)
         start_h = int(np.random.rand() * remain_h)
         flag = is_cross_text([start_w, start_h], length, new_vertices[labels == 1, :])
-    box = (start_w, start_h, start_w + length, start_h + length)
-    region = img.crop(box)
+    region = img[start_h : start_h + length, start_w : start_w + length]
     if new_vertices.size == 0:
         return region, new_vertices
 
@@ -277,12 +279,12 @@ def rotate_all_pixels(rotate_mat, anchor_x, anchor_y, length):
 
 
 def resize_img(img, vertices, size):
-    h, w = img.height, img.width
+    h, w, _ = img.shape
     ratio = size / max(h, w)
     if w > h:
-        img = img.resize((size, int(h * ratio)), Image.BILINEAR)
+        img = cv2.resize(img, (size, int(h * ratio)), interpolation=cv2.INTER_LINEAR)
     else:
-        img = img.resize((int(w * ratio), size), Image.BILINEAR)
+        img = cv2.resize(img, (int(w * ratio), size), interpolation=cv2.INTER_LINEAR)
     new_vertices = vertices * ratio
     return img, new_vertices
 
@@ -290,17 +292,17 @@ def resize_img(img, vertices, size):
 def adjust_height(img, vertices, ratio=0.2):
     """adjust height of image to aug data
     Input:
-        img         : PIL Image
+        img         : ndarray
         vertices    : vertices of text regions <numpy.ndarray, (n,8)>
         ratio       : height changes in [0.8, 1.2]
     Output:
-        img         : adjusted PIL Image
+        img         : adjusted ndarray
         new_vertices: adjusted vertices
     """
     ratio_h = 1 + ratio * (np.random.rand() * 2 - 1)
-    old_h = img.height
+    old_h, width, _ = img.shape
     new_h = int(np.around(old_h * ratio_h))
-    img = img.resize((img.width, new_h), Image.BILINEAR)
+    img = cv2.resize(img, (width, new_h), interpolation=cv2.INTER_LINEAR)
 
     new_vertices = vertices.copy()
     if vertices.size > 0:
@@ -311,17 +313,19 @@ def adjust_height(img, vertices, ratio=0.2):
 def rotate_img(img, vertices, angle_range=10):
     """rotate image [-10, 10] degree to aug data
     Input:
-        img         : PIL Image
+        img         : ndarray
         vertices    : vertices of text regions <numpy.ndarray, (n,8)>
         angle_range : rotate range
     Output:
-        img         : rotated PIL Image
+        img         : rotated ndarray
         new_vertices: rotated vertices
     """
-    center_x = (img.width - 1) / 2
-    center_y = (img.height - 1) / 2
+    height, width, _ = img.shape
+    center_x = (width - 1) / 2
+    center_y = (height - 1) / 2
     angle = angle_range * (np.random.rand() * 2 - 1)
-    img = img.rotate(angle, Image.BILINEAR)
+    M = cv2.getRotationMatrix2D((center_x, center_y), angle, 1.0)
+    img = cv2.warpAffine(img, M, (width, height), flags=cv2.INTER_LINEAR)
     new_vertices = np.zeros(vertices.shape)
     for i, vertice in enumerate(vertices):
         new_vertices[i, :] = rotate_vertices(
@@ -395,7 +399,7 @@ class SceneTextDataset(Dataset):
         self.images = []
         self.vertices = []
         self.labels = []
-        for idx in range(len(self.image_fnames)):
+        for idx in tqdm(range(len(self.image_fnames))):
             image_fname = self.image_fnames[idx]
             image_fpath = osp.join(self.image_dir, image_fname)
             vertices, labels = [], []
@@ -419,7 +423,15 @@ class SceneTextDataset(Dataset):
                 ignore_under=self.ignore_under_threshold,
                 drop_under=self.drop_under_threshold,
             )
-            self.images.append(Image.open(image_fpath))
+            image = cv2.imread(image_fpath)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            image, vertices = resize_img(image, vertices, self.image_size)
+            image, vertices = adjust_height(image, vertices)
+            image, vertices = rotate_img(image, vertices)
+            image, vertices = crop_img(image, vertices, labels, self.crop_size)
+
+            self.images.append(image)
             self.vertices.append(vertices)
             self.labels.append(labels)
 
@@ -430,15 +442,6 @@ class SceneTextDataset(Dataset):
         image = self.images[idx]
         vertices = self.vertices[idx]
         labels = self.labels[idx]
-        
-        image, vertices = resize_img(image, vertices, self.image_size)
-        image, vertices = adjust_height(image, vertices)
-        image, vertices = rotate_img(image, vertices)
-        image, vertices = crop_img(image, vertices, labels, self.crop_size)
-
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        image = np.array(image)
 
         funcs = []
         if self.color_jitter:
