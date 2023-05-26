@@ -52,6 +52,8 @@ def parse_args():
     parser.add_argument("--exp_name", type=str, default="[tag]ExpName_V1")
     parser.add_argument("--seed", type=int, default=3)
     parser.add_argument("--n_save", type=int, default=3)
+    parser.add_argument("--split_num", type=int, default=0)
+    parser.add_argument("--patience", type=int, default=10)
 
     args = parser.parse_args()
 
@@ -129,6 +131,8 @@ def do_training(
     exp_name,
     seed,
     n_save,
+    split_num,
+    patience,
 ):
     set_seed(seed)
 
@@ -144,17 +148,34 @@ def do_training(
     if not osp.exists(model_dir):
         os.makedirs(model_dir)
 
-    dataset = SceneTextDataset(
+    # ======== train dataset loader ========
+    train_dataset = SceneTextDataset(
         data_dir,
         split="train",
+        num=split_num,
         image_size=image_size,
         crop_size=input_size,
         ignore_tags=ignore_tags,
     )
-    dataset = EASTDataset(dataset)
-    num_batches = math.ceil(len(dataset) / batch_size)
+    train_dataset = EASTDataset(train_dataset)
+    train_num_batches = math.ceil(len(train_dataset) / batch_size)
     train_loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+        train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+    )
+
+    # ======== val dataset loader ========
+    val_dataset = SceneTextDataset(
+        data_dir,
+        split="val",
+        num=split_num,
+        image_size=image_size,
+        crop_size=input_size,
+        ignore_tags=ignore_tags,
+    )
+    val_dataset = EASTDataset(val_dataset)
+    val_num_batches = math.ceil(len(val_dataset) / batch_size)
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
     )
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -165,15 +186,23 @@ def do_training(
         optimizer, milestones=[max_epoch // 2], gamma=0.1
     )
 
+    # early stopping
+    patience = patience
+    counter = 0
+    best_val_loss = np.inf
+    
     # save best checkpoint(최대 n_save개)
     best_loss = BestScore(n=n_save)
     train_epoch_loss = AverageMeter()
+    val_epoch_loss = AverageMeter()
 
-    model.train()
+    
     for epoch in range(max_epoch):
+        # ======== train ========
+        model.train()
         epoch_start = time.time()
         train_epoch_loss.reset()
-        with tqdm(total=num_batches) as pbar:
+        with tqdm(total=train_num_batches) as pbar:
             for img, gt_score_map, gt_geo_map, roi_mask in train_loader:
                 pbar.set_description("[Epoch {}]".format(epoch + 1))
 
@@ -188,29 +217,72 @@ def do_training(
                 train_epoch_loss.update(loss.item())
 
                 pbar.update(1)
-                val_dict = {
-                    "Cls loss": extra_info["cls_loss"],
-                    "Angle loss": extra_info["angle_loss"],
-                    "IoU loss": extra_info["iou_loss"],
+                train_dict = {
+                    "Train Cls loss": extra_info["cls_loss"],
+                    "Train Angle loss": extra_info["angle_loss"],
+                    "Train IoU loss": extra_info["iou_loss"],
                 }
-                pbar.set_postfix(val_dict)
+                pbar.set_postfix(train_dict)
+                wandb.log(train_dict)
 
         scheduler.step()
 
         print(
-            "Mean loss: {:.4f} | Elapsed time: {}".format(
+            "> Train : Mean loss: {:.4f} | Elapsed time: {}".format(
                 train_epoch_loss.avg,
                 timedelta(seconds=time.time() - epoch_start),
             )
         )
 
-        # 우선 loss를 기준으로 best model을 저장하겠습니다.
-        best_loss.update(epoch, train_epoch_loss.avg, model.state_dict())
+        # ======== val ========
+        with torch.no_grad():
+            model.eval()
+            epoch_start = time.time()
+            with tqdm(total=val_num_batches) as pbar:
+                for img, gt_score_map, gt_geo_map, roi_mask in val_loader:
+                    pbar.set_description('Evaluate..')
+                    loss, extra_info = model.train_step(
+                        img, gt_score_map, gt_geo_map, roi_mask
+                    )
+                    val_epoch_loss.update(loss.item())
+                    
+                    pbar.update(1)
+                    val_dict = {
+                        "Val Cls loss": extra_info["cls_loss"],
+                        "Val Angle loss": extra_info["angle_loss"],
+                        "Val IoU loss": extra_info["iou_loss"],
+                    }
+                    pbar.set_postfix(val_dict)
+                    wandb.log(val_dict)
 
+        # val loss 기준으로 best loss 저장
+        if val_epoch_loss.avg < best_val_loss:
+            ckpt_fpath = osp.join(model_dir, "best.pth")
+            torch.save(model.state_dict(), ckpt_fpath)
+            print("New best model for val loss : {:.4f}".format(val_epoch_loss.avg))
+            best_val_loss = val_epoch_loss.avg
+            counter = 0
+        else:
+            counter += 1
+            print("Not Val Update.. Counter : {}".format(counter))
+
+        print(
+            "> Val : Mean loss: {:.4f} | Best Val loss: {:.4f} | Elapsed time: {}".format(
+                val_epoch_loss.avg, best_val_loss,
+                timedelta(seconds=time.time() - epoch_start),
+            )
+        )
+        if counter > patience:
+            print("Early Stopping!")
+            break
+                
+
+        best_loss.update(epoch, val_epoch_loss.avg, model.state_dict())
+        
         folder_epoch = set(os.listdir(model_dir))
         best_epoch = set(map(lambda x: str(x) + ".pth", list(best_loss.metric.keys())))
 
-        remove_epoch = list(folder_epoch - best_epoch - set(["latest.pth"]))
+        remove_epoch = list(folder_epoch - best_epoch - set(["latest.pth"]) - set(["best.pth"]))
         add_epoch = list(best_epoch - folder_epoch)
 
         if remove_epoch:
@@ -228,7 +300,7 @@ def do_training(
             {
                 "Train Loss": train_epoch_loss.avg,
                 # "Train F1-Score": train_f1,
-                # "Val Loss": val_epoch_loss,
+                "Val Loss": val_epoch_loss.avg,
                 # "Val F1-Score": val_f1,
             }
         )
@@ -241,6 +313,6 @@ def main(args):
 
 
 if __name__ == "__main__":
+    torch.cuda.empty_cache()
     args = parse_args()
-    args.max_epoch = 1
     main(args)

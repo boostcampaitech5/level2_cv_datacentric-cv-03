@@ -27,7 +27,7 @@ def parse_args():
         "--model_dir", default=os.environ.get("SM_CHANNEL_MODEL", "trained_models")
     )
     parser.add_argument("--exp_name", type=str, default="[tag]ExpName_V1")
-    parser.add_argument("--ckpt", type=str, default="latest.pth")
+    parser.add_argument("--ckpt", type=str, default="best.pth")
     parser.add_argument(
         "--output_dir", default=os.environ.get("SM_OUTPUT_DATA_DIR", "predictions")
     )
