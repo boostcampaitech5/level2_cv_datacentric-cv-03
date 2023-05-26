@@ -53,6 +53,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=3)
     parser.add_argument("--n_save", type=int, default=3)
     parser.add_argument("--split_num", type=int, default=0)
+    parser.add_argument("--patience", type=int, default=10)
 
     args = parser.parse_args()
 
@@ -131,6 +132,7 @@ def do_training(
     seed,
     n_save,
     split_num,
+    patience,
 ):
     set_seed(seed)
 
@@ -185,7 +187,7 @@ def do_training(
     )
 
     # early stopping
-    patience = 10
+    patience = patience
     counter = 0
     best_val_loss = np.inf
     
@@ -238,7 +240,7 @@ def do_training(
             epoch_start = time.time()
             with tqdm(total=val_num_batches) as pbar:
                 for img, gt_score_map, gt_geo_map, roi_mask in val_loader:
-                    pbar.set_description('Evaluate.. : ')
+                    pbar.set_description('Evaluate..')
                     loss, extra_info = model.train_step(
                         img, gt_score_map, gt_geo_map, roi_mask
                     )
