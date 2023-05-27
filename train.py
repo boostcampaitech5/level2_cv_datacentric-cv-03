@@ -2,6 +2,8 @@ import os
 import os.path as osp
 import time
 import math
+import json
+import cv2
 from datetime import timedelta
 from argparse import ArgumentParser
 
@@ -14,6 +16,8 @@ from tqdm import tqdm
 from east_dataset import EASTDataset
 from dataset import SceneTextDataset
 from model import EAST
+from deteval import default_evaluation_params, calc_deteval_metrics
+from detect import detect
 
 import numpy as np
 import random
@@ -196,6 +200,19 @@ def do_training(
     train_epoch_loss = AverageMeter()
     val_epoch_loss = AverageMeter()
 
+    # validation image, validation annotation 정보 저장
+    val_img = []
+    val_gt_dict = {}
+    split_num = 1
+    with open(f'../data/medical/ufo/val{split_num}.json') as json_file:
+        data = json.load(json_file)
+        for idx,img in enumerate(data['images']):
+            val_img.append(cv2.imread(f'../data/medical/img/train/{img}'))
+            tmp = []
+            for num in data['images'][img]['words']:
+                tmp.append([data['images'][img]['words'][num]['points']])
+            val_gt_dict[idx] = tmp
+
     
     for epoch in range(max_epoch):
         # ======== train ========
@@ -255,6 +272,21 @@ def do_training(
                     pbar.set_postfix(val_dict)
                     wandb.log(val_dict)
 
+        # ======== recall, precision and hmean ============
+        pred = detect(model,val_img,input_size= 2048)
+        
+        pred_dict = {}
+        for i in range(len(pred)):
+            pred_dict[i] = pred[i]
+
+        result = calc_deteval_metrics(pred_dict, val_gt_dict)
+        result_dict = {
+            "Recall" : result['total']['recall'],
+            "Precision" : result['total']['precision'],
+            "Hmean" : result['total']['hmean']
+        }
+        wandb.log(result_dict)
+        
         # val loss 기준으로 best loss 저장
         if val_epoch_loss.avg < best_val_loss:
             ckpt_fpath = osp.join(model_dir, "best.pth")
