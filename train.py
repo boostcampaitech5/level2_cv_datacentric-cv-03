@@ -190,13 +190,12 @@ def do_training(
     patience = patience
     counter = 0
     best_val_loss = np.inf
-    
+
     # save best checkpoint(최대 n_save개)
     best_loss = BestScore(n=n_save)
     train_epoch_loss = AverageMeter()
     val_epoch_loss = AverageMeter()
 
-    
     for epoch in range(max_epoch):
         # ======== train ========
         model.train()
@@ -240,12 +239,12 @@ def do_training(
             epoch_start = time.time()
             with tqdm(total=val_num_batches) as pbar:
                 for img, gt_score_map, gt_geo_map, roi_mask in val_loader:
-                    pbar.set_description('Evaluate..')
+                    pbar.set_description("Evaluate..")
                     loss, extra_info = model.train_step(
                         img, gt_score_map, gt_geo_map, roi_mask
                     )
                     val_epoch_loss.update(loss.item())
-                    
+
                     pbar.update(1)
                     val_dict = {
                         "Val Cls loss": extra_info["cls_loss"],
@@ -268,21 +267,23 @@ def do_training(
 
         print(
             "> Val : Mean loss: {:.4f} | Best Val loss: {:.4f} | Elapsed time: {}".format(
-                val_epoch_loss.avg, best_val_loss,
+                val_epoch_loss.avg,
+                best_val_loss,
                 timedelta(seconds=time.time() - epoch_start),
             )
         )
         if counter > patience:
             print("Early Stopping!")
             break
-                
 
         best_loss.update(epoch, val_epoch_loss.avg, model.state_dict())
-        
+
         folder_epoch = set(os.listdir(model_dir))
         best_epoch = set(map(lambda x: str(x) + ".pth", list(best_loss.metric.keys())))
 
-        remove_epoch = list(folder_epoch - best_epoch - set(["latest.pth"]) - set(["best.pth"]))
+        remove_epoch = list(
+            folder_epoch - best_epoch - set(["latest.pth"]) - set(["best.pth"])
+        )
         add_epoch = list(best_epoch - folder_epoch)
 
         if remove_epoch:
