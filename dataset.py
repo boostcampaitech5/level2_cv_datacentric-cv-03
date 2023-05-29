@@ -2,6 +2,7 @@ import os.path as osp
 import math
 import json
 from tqdm import tqdm
+import pickle
 
 import numpy as np
 import cv2
@@ -366,77 +367,25 @@ class SceneTextDataset(Dataset):
         root_dir,
         split="train",
         num=0,
-        image_size=2048,
-        crop_size=1024,
-        ignore_tags=[],
-        ignore_under_threshold=10,
-        drop_under_threshold=1,
         color_jitter=True,
         normalize=True,
     ):
         if num == 0:
-            json_dir = osp.join(root_dir, "ufo/{}.json".format(split))
+            pkl_dir = osp.join(root_dir, "ufo/{}.pickle".format(split))
         else:
-            json_dir = osp.join(root_dir, "ufo/{}.json".format(split + str(num)))
+            pkl_dir = osp.join(root_dir, "ufo/{}.pickle".format(split + str(num)))
 
-        with open(json_dir, "r") as f:
-            anno = json.load(f)
+        with open(pkl_dir, "rb") as fr:
+            total = pickle.load(fr)
 
-        self.anno = anno
-        self.image_fnames = sorted(anno["images"].keys())
-        if split == "val":
-            split = "train"
-        self.image_dir = osp.join(root_dir, "img", split)
+        self.images = total["images"]
+        self.vertices = total["vertices"]
+        self.labels = total["labels"]
 
-        self.image_size, self.crop_size = image_size, crop_size
         self.color_jitter, self.normalize = color_jitter, normalize
 
-        self.ignore_tags = ignore_tags
-
-        self.drop_under_threshold = drop_under_threshold
-        self.ignore_under_threshold = ignore_under_threshold
-
-        self.images = []
-        self.vertices = []
-        self.labels = []
-        for idx in tqdm(range(len(self.image_fnames))):
-            image_fname = self.image_fnames[idx]
-            image_fpath = osp.join(self.image_dir, image_fname)
-            vertices, labels = [], []
-            for word_info in self.anno["images"][image_fname]["words"].values():
-                word_tags = word_info["tags"]
-                ignore_sample = any(
-                    elem for elem in word_tags if elem in self.ignore_tags
-                )
-                num_pts = np.array(word_info["points"]).shape[0]
-
-                if ignore_sample or num_pts > 4:
-                    continue
-                vertices.append(np.array(word_info["points"]).flatten())
-                labels.append(int(not word_info["illegibility"]))
-            vertices, labels = np.array(vertices, dtype=np.float32), np.array(
-                labels, dtype=np.int64
-            )
-            vertices, labels = filter_vertices(
-                vertices,
-                labels,
-                ignore_under=self.ignore_under_threshold,
-                drop_under=self.drop_under_threshold,
-            )
-            image = cv2.imread(image_fpath)
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-            image, vertices = resize_img(image, vertices, self.image_size)
-            image, vertices = adjust_height(image, vertices)
-            image, vertices = rotate_img(image, vertices)
-            image, vertices = crop_img(image, vertices, labels, self.crop_size)
-
-            self.images.append(image)
-            self.vertices.append(vertices)
-            self.labels.append(labels)
-
     def __len__(self):
-        return len(self.image_fnames)
+        return len(self.images)
 
     def __getitem__(self, idx):
         image = self.images[idx]

@@ -38,16 +38,9 @@ def parse_args():
     parser.add_argument("--device", default="cuda" if cuda.is_available() else "cpu")
     parser.add_argument("--num_workers", type=int, default=8)
 
-    parser.add_argument("--image_size", type=int, default=2048)
-    parser.add_argument("--input_size", type=int, default=1024)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--max_epoch", type=int, default=150)
-    parser.add_argument(
-        "--ignore_tags",
-        type=list,
-        default=["masked", "excluded-region", "maintable", "stamp"],
-    )
 
     parser.add_argument("--exp_name", type=str, default="[tag]ExpName_V1")
     parser.add_argument("--seed", type=int, default=3)
@@ -56,9 +49,6 @@ def parse_args():
     parser.add_argument("--patience", type=int, default=10)
 
     args = parser.parse_args()
-
-    if args.input_size % 32 != 0:
-        raise ValueError("`input_size` must be a multiple of 32")
 
     return args
 
@@ -121,13 +111,10 @@ def do_training(
     data_dir,
     model_dir,
     device,
-    image_size,
-    input_size,
     num_workers,
     batch_size,
     learning_rate,
     max_epoch,
-    ignore_tags,
     exp_name,
     seed,
     n_save,
@@ -153,9 +140,6 @@ def do_training(
         data_dir,
         split="train",
         num=split_num,
-        image_size=image_size,
-        crop_size=input_size,
-        ignore_tags=ignore_tags,
     )
     train_dataset = EASTDataset(train_dataset)
     train_num_batches = math.ceil(len(train_dataset) / batch_size)
@@ -168,9 +152,6 @@ def do_training(
         data_dir,
         split="val",
         num=split_num,
-        image_size=image_size,
-        crop_size=input_size,
-        ignore_tags=ignore_tags,
     )
     val_dataset = EASTDataset(val_dataset)
     val_num_batches = math.ceil(len(val_dataset) / batch_size)
