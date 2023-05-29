@@ -2,8 +2,6 @@ import os
 import os.path as osp
 import time
 import math
-import json
-import cv2
 from datetime import timedelta
 from argparse import ArgumentParser
 
@@ -16,13 +14,11 @@ from tqdm import tqdm
 from east_dataset import EASTDataset
 from dataset import SceneTextDataset
 from model import EAST
-from deteval import default_evaluation_params, calc_deteval_metrics
-from detect import detect
 
 import numpy as np
 import random
 import wandb
-
+from accelerate import Accelerator
 
 def parse_args():
     parser = ArgumentParser()
@@ -42,9 +38,16 @@ def parse_args():
     parser.add_argument("--device", default="cuda" if cuda.is_available() else "cpu")
     parser.add_argument("--num_workers", type=int, default=8)
 
+    parser.add_argument("--image_size", type=int, default=2048)
+    parser.add_argument("--input_size", type=int, default=1024)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--max_epoch", type=int, default=150)
+    parser.add_argument(
+        "--ignore_tags",
+        type=list,
+        default=["masked", "excluded-region", "maintable", "stamp"],
+    )
 
     parser.add_argument("--exp_name", type=str, default="[tag]ExpName_V1")
     parser.add_argument("--seed", type=int, default=3)
@@ -53,6 +56,9 @@ def parse_args():
     parser.add_argument("--patience", type=int, default=10)
 
     args = parser.parse_args()
+
+    if args.input_size % 32 != 0:
+        raise ValueError("`input_size` must be a multiple of 32")
 
     return args
 
@@ -111,14 +117,17 @@ class AverageMeter:
         self.avg = self.sum / self.count
 
 
-def do_training(
+def main(
     data_dir,
     model_dir,
     device,
+    image_size,
+    input_size,
     num_workers,
     batch_size,
     learning_rate,
     max_epoch,
+    ignore_tags,
     exp_name,
     seed,
     n_save,
@@ -144,6 +153,9 @@ def do_training(
         data_dir,
         split="train",
         num=split_num,
+        image_size=image_size,
+        crop_size=input_size,
+        ignore_tags=ignore_tags,
     )
     train_dataset = EASTDataset(train_dataset)
     train_num_batches = math.ceil(len(train_dataset) / batch_size)
@@ -156,6 +168,9 @@ def do_training(
         data_dir,
         split="val",
         num=split_num,
+        image_size=image_size,
+        crop_size=input_size,
+        ignore_tags=ignore_tags,
     )
     val_dataset = EASTDataset(val_dataset)
     val_num_batches = math.ceil(len(val_dataset) / batch_size)
@@ -163,7 +178,9 @@ def do_training(
         val_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
     )
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    accelerator = Accelerator(gradient_accumulation_steps=2)
+    device = accelerator.device
     model = EAST()
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -175,29 +192,31 @@ def do_training(
     patience = patience
     counter = 0
     best_val_loss = np.inf
-
+    
     # save best checkpoint(최대 n_save개)
     best_loss = BestScore(n=n_save)
     train_epoch_loss = AverageMeter()
     val_epoch_loss = AverageMeter()
 
-
+    model, optimizer, train_loader, scheduler = accelerator.prepare(model, optimizer, train_loader, scheduler)
+    
     for epoch in range(max_epoch):
         # ======== train ========
         model.train()
         epoch_start = time.time()
         train_epoch_loss.reset()
-        with tqdm(total=train_num_batches) as pbar:
+        with tqdm(total=train_num_batches, disable=not accelerator.is_local_main_process) as pbar:
             for img, gt_score_map, gt_geo_map, roi_mask in train_loader:
                 pbar.set_description("[Epoch {}]".format(epoch + 1))
 
-                loss, extra_info = model.train_step(
+                with accelerator.accumulate(model):
+                    optimizer.zero_grad()
+                    loss, extra_info = model.train_step(
                     img, gt_score_map, gt_geo_map, roi_mask
-                )
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                    )
+                    
+                    accelerator.backward(loss)
+                    optimizer.step()
 
                 train_epoch_loss.update(loss.item())
 
@@ -225,12 +244,12 @@ def do_training(
             epoch_start = time.time()
             with tqdm(total=val_num_batches) as pbar:
                 for img, gt_score_map, gt_geo_map, roi_mask in val_loader:
-                    pbar.set_description("Evaluate..")
+                    pbar.set_description('Evaluate..')
                     loss, extra_info = model.train_step(
                         img, gt_score_map, gt_geo_map, roi_mask
                     )
                     val_epoch_loss.update(loss.item())
-
+                    
                     pbar.update(1)
                     val_dict = {
                         "Val Cls loss": extra_info["cls_loss"],
@@ -240,21 +259,6 @@ def do_training(
                     pbar.set_postfix(val_dict)
                     wandb.log(val_dict)
 
-        # ======== recall, precision and hmean ============
-        pred = detect(model,val_img,input_size= 2048)
-        
-        pred_dict = {}
-        for i in range(len(pred)):
-            pred_dict[i] = pred[i]
-
-        result = calc_deteval_metrics(pred_dict, val_gt_dict)
-        result_dict = {
-            "Recall" : result['total']['recall'],
-            "Precision" : result['total']['precision'],
-            "Hmean" : result['total']['hmean']
-        }
-        wandb.log(result_dict)
-        
         # val loss 기준으로 best loss 저장
         if val_epoch_loss.avg < best_val_loss:
             ckpt_fpath = osp.join(model_dir, "best.pth")
@@ -268,23 +272,21 @@ def do_training(
 
         print(
             "> Val : Mean loss: {:.4f} | Best Val loss: {:.4f} | Elapsed time: {}".format(
-                val_epoch_loss.avg,
-                best_val_loss,
+                val_epoch_loss.avg, best_val_loss,
                 timedelta(seconds=time.time() - epoch_start),
             )
         )
         if counter > patience:
             print("Early Stopping!")
             break
+                
 
         best_loss.update(epoch, val_epoch_loss.avg, model.state_dict())
-
+        
         folder_epoch = set(os.listdir(model_dir))
         best_epoch = set(map(lambda x: str(x) + ".pth", list(best_loss.metric.keys())))
 
-        remove_epoch = list(
-            folder_epoch - best_epoch - set(["latest.pth"]) - set(["best.pth"])
-        )
+        remove_epoch = list(folder_epoch - best_epoch - set(["latest.pth"]) - set(["best.pth"]))
         add_epoch = list(best_epoch - folder_epoch)
 
         if remove_epoch:
@@ -296,6 +298,9 @@ def do_training(
             )
 
         ckpt_fpath = osp.join(model_dir, "latest.pth")
+        #-- 나중에 finetuning 할 때 문제 있으면 사용
+        # unwrapped_model = accelerator.unwrap_model(model)
+        # accelerator.save(unwrapped_model.state_dict(), ckpt_fpath)
         torch.save(model.state_dict(), ckpt_fpath)
 
         wandb.log(
@@ -306,15 +311,9 @@ def do_training(
                 # "Val F1-Score": val_f1,
             }
         )
-
-
-def main(args):
-    start_time = time.time()
-    do_training(**args.__dict__)
     print(timedelta(seconds=time.time() - start_time))
-
 
 if __name__ == "__main__":
     torch.cuda.empty_cache()
     args = parse_args()
-    main(args)
+    main(**args.__dict__)
