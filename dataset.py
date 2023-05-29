@@ -404,3 +404,95 @@ class SceneTextDataset(Dataset):
         roi_mask = generate_roi_mask(image, vertices, labels)
 
         return image, word_bboxes, roi_mask
+    
+    
+class SceneTextDataset_VAL(Dataset):
+    def __init__(self, root_dir,
+                 image_fnames,
+                 split='train',
+                 image_size=2048,
+                 crop_size=1024,
+                 ignore_tags=[],
+                 ignore_under_threshold=10,
+                 drop_under_threshold=1,
+                 color_jitter=True,
+                 normalize=True,
+                 transform=True,
+                 train=True):
+        
+
+
+        with open(osp.join(root_dir, 'ufo/{}.json'.format(split)), 'r') as f:
+            anno = json.load(f)
+
+
+        
+
+        self.anno = anno
+        self.image_fnames = image_fnames
+        self.image_dir = osp.join(root_dir, 'img', split)
+
+        self.image_size, self.crop_size = image_size, crop_size
+        self.color_jitter, self.normalize = color_jitter, normalize
+        self.transform = transform
+        self.train = train
+        
+        self.ignore_tags = ignore_tags
+
+        self.drop_under_threshold = drop_under_threshold
+        self.ignore_under_threshold = ignore_under_threshold
+
+    def __len__(self):
+        return len(self.image_fnames)
+
+    def __getitem__(self, idx):
+        image_fname = self.image_fnames[idx]
+        image_fpath = osp.join(self.image_dir, image_fname)
+
+        vertices, labels = [], []
+        for word_info in self.anno['images'][image_fname]['words'].values():
+            word_tags = word_info['tags']
+
+            ignore_sample = any(elem for elem in word_tags if elem in self.ignore_tags)
+            num_pts = np.array(word_info['points']).shape[0]
+
+            # skip samples with ignore tag and
+            # samples with number of points greater than 4
+            if ignore_sample or num_pts > 4:
+                continue
+
+            vertices.append(np.array(word_info['points']).flatten())
+            labels.append(int(not word_info['illegibility']))
+        vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
+
+        vertices, labels = filter_vertices(
+            vertices,
+            labels,
+            ignore_under=self.ignore_under_threshold,
+            drop_under=self.drop_under_threshold
+        )
+
+        image = Image.open(image_fpath)
+        if self.transform:
+            image, vertices = resize_img(image, vertices, self.image_size)
+            image, vertices = adjust_height(image, vertices)
+            image, vertices = rotate_img(image, vertices)
+            image, vertices = crop_img(image, vertices, labels, self.crop_size)
+
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        image = np.array(image)
+        funcs = []
+        if self.color_jitter:
+            funcs.append(A.ColorJitter(0.5, 0.5, 0.5, 0.25))
+        if self.normalize:
+            funcs.append(A.Normalize())
+        transform = A.Compose(funcs)
+
+        word_bboxes = np.reshape(vertices, (-1, 4, 2))
+        roi_mask = generate_roi_mask(image, vertices, labels)
+        
+        if self.train:
+            image = transform(image=image)['image']
+            
+        return image, word_bboxes, roi_mask
