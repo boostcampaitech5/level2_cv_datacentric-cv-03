@@ -12,13 +12,20 @@ from torch.optim import lr_scheduler
 from tqdm import tqdm
 
 from east_dataset import EASTDataset
-from dataset import SceneTextDataset
+from dataset import SceneTextDataset,SceneTextDataset_VAL
 from model import EAST
+from east_dataset import generate_score_geo_maps
+from detect import get_bboxes
+from albumentations.pytorch.transforms import ToTensorV2
+from deteval import calc_deteval_metrics
 
 import numpy as np
 import random
 import wandb
-
+import cv2
+import json 
+import albumentations as A
+from albumentations.augmentations.geometric.resize import LongestMaxSize
 
 def parse_args():
     parser = ArgumentParser()
@@ -38,17 +45,31 @@ def parse_args():
     parser.add_argument("--device", default="cuda" if cuda.is_available() else "cpu")
     parser.add_argument("--num_workers", type=int, default=8)
 
+    parser.add_argument("--image_size", type=int, default=2048)
+    parser.add_argument("--input_size", type=int, default=1024)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--max_epoch", type=int, default=150)
+    parser.add_argument(
+        "--ignore_tags",
+        type=list,
+        default=["masked", "excluded-region", "maintable", "stamp"],
+    )
 
     parser.add_argument("--exp_name", type=str, default="[tag]ExpName_V1")
     parser.add_argument("--seed", type=int, default=3)
     parser.add_argument("--n_save", type=int, default=3)
     parser.add_argument("--split_num", type=int, default=0)
     parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--interval", type=int, default=10)
+    parser.add_argument("--start_num", type=int, default=30)
+    parser.add_argument("--matrix_size", type=int, default=2)
+
 
     args = parser.parse_args()
+
+    if args.input_size % 32 != 0:
+        raise ValueError("`input_size` must be a multiple of 32")
 
     return args
 
@@ -107,19 +128,25 @@ class AverageMeter:
         self.avg = self.sum / self.count
 
 
-def do_training(
+def main(
     data_dir,
     model_dir,
     device,
+    image_size,
+    input_size,
+    matrix_size,
     num_workers,
     batch_size,
     learning_rate,
     max_epoch,
+    ignore_tags,
     exp_name,
     seed,
     n_save,
     split_num,
     patience,
+    interval,
+    start_num
 ):
     set_seed(seed)
 
@@ -153,8 +180,10 @@ def do_training(
         split="val",
         num=split_num,
     )
+
     val_dataset = EASTDataset(val_dataset)
     val_num_batches = math.ceil(len(val_dataset) / batch_size)
+    matrix_num_batches = math.ceil(len(val_dataset) / matrix_size)
     val_loader = DataLoader(
         val_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
     )
@@ -171,13 +200,56 @@ def do_training(
     patience = patience
     counter = 0
     best_val_loss = np.inf
-
+    
     # save best checkpoint(최대 n_save개)
     best_loss = BestScore(n=n_save)
     train_epoch_loss = AverageMeter()
     val_epoch_loss = AverageMeter()
 
+    # validation dataloader
+    def split_list(all_list,ratio=1):
+        """_summary_
+        image list에서 train, valid split
+        Args:
+            all_list (list): 전체 이미지 파일
+            ratio (float, optional): split 비율. Defaults to 0.2.
+
+        Returns:
+            list[trian, val]: train_img_list, val_img_list
+        """
+        length = int(len(all_list))
+        split_length = length -int(ratio*length)
+        random.shuffle(all_list)
+        train_list = all_list[:split_length]
+        val_list = all_list[split_length:]
+    
+        return train_list, val_list
+
+    with open(f'../data/medical/ufo/val{split_num}.json') as json_file:
+        data = json.load(json_file)
+        all_imgs = sorted(data['images'].keys())
+        _, val_list = split_list(all_imgs)
+
+
+    val_dataset_for_matrix = SceneTextDataset_VAL(
+        args.data_dir,
+        val_list,
+        color_jitter=False,
+        ignore_tags=args.ignore_tags,
+        transform=False,
+        normalize=False,
+        train=False,
+    )
+
+    prep_fn = A.Compose([
+            LongestMaxSize(args.image_size), 
+            A.PadIfNeeded(min_height=args.image_size, min_width=args.image_size, position=A.PadIfNeeded.PositionType.TOP_LEFT),
+            A.Normalize(), 
+            ])
+
+
     for epoch in range(max_epoch):
+
         # ======== train ========
         model.train()
         epoch_start = time.time()
@@ -214,18 +286,18 @@ def do_training(
             )
         )
 
-        # ======== val ========
+         # ======== val ========
         with torch.no_grad():
             model.eval()
             epoch_start = time.time()
             with tqdm(total=val_num_batches) as pbar:
                 for img, gt_score_map, gt_geo_map, roi_mask in val_loader:
-                    pbar.set_description("Evaluate..")
+                    pbar.set_description('Evaluate..')
                     loss, extra_info = model.train_step(
                         img, gt_score_map, gt_geo_map, roi_mask
                     )
                     val_epoch_loss.update(loss.item())
-
+                    
                     pbar.update(1)
                     val_dict = {
                         "Val Cls loss": extra_info["cls_loss"],
@@ -234,6 +306,113 @@ def do_training(
                     }
                     pbar.set_postfix(val_dict)
                     wandb.log(val_dict)
+                
+                # precision을 계산하는 경우 
+                if (epoch+1) % interval == 0 and epoch >= start_num:
+                    val_loss, val_start = 0, time.time()
+                    val_average = {
+                        'Val Cls loss':0,
+                        'Val Angle loss': 0,
+                        'Val IoU loss': 0
+                    }
+                    precision = 0
+                    recall = 0
+                    hmean = 0
+                    predict_box = {}
+                    gt_box = {}
+                    transcriptions_dict = {}
+
+                    with torch.no_grad():
+                        with tqdm(total = matrix_num_batches) as pbar:
+                            batch_data = {
+                                "gt_score_maps" : [],
+                                "gt_geo_maps" : [],
+                                "gt_roi_masks" : [],
+                            }
+                            batch, orig_sizes = [], []
+                            temp = 0
+                            
+                            for i,(img, word_bboxes, roi_mask) in enumerate(iter(val_dataset_for_matrix)):
+                                # 배치만큼의 이미지를 넣는다
+                                orig_sizes.append(img.shape[:2])
+                                input_img= prep_fn(image=img)['image']
+                                gt_score_map, gt_geo_map = generate_score_geo_maps(input_img, word_bboxes, map_scale=0.5)
+                                input_img = ToTensorV2()(image=input_img)['image']
+                                batch.append(input_img)
+                                gt_box[i]=word_bboxes
+                                transcriptions_dict[i] = ["1"]*len(word_bboxes)
+                                mask_size = int(args.image_size * 0.5), int(args.image_size * 0.5)
+                                roi_mask = cv2.resize(roi_mask, dsize=mask_size)
+                                if roi_mask.ndim == 2:
+                                    roi_mask = np.expand_dims(roi_mask, axis=2)
+                                
+                                batch_data['gt_score_maps'].append(torch.Tensor(gt_score_map).permute(2, 0, 1))
+                                batch_data['gt_geo_maps'].append(torch.Tensor(gt_geo_map).permute(2, 0, 1))
+                                batch_data['gt_roi_masks'].append(torch.Tensor(roi_mask).permute(2, 0, 1))
+
+                                if len(batch) == matrix_size:
+                                    pbar.set_description('[Epoch {}]'.format(epoch + 1))
+                                    batch = torch.stack(batch, dim=0).to(device)
+                                    gt_score_maps = torch.stack(batch_data['gt_score_maps'],dim=0).to(device)
+                                    gt_geo_maps = torch.stack(batch_data['gt_geo_maps'],dim=0).to(device)
+                                    gt_roi_masks = torch.stack(batch_data['gt_roi_masks'],dim=0).to(device)
+                                    
+                                    # loss를 계산하기 위한 gt_geo_map, gt_score_map 생성
+                                    score_maps, geo_maps = model(batch)
+                                    
+                                    # bbox output
+                                    score_maps, geo_maps = score_maps.cpu().numpy(), geo_maps.cpu().numpy()
+                                    for score_map, geo_map, orig_size in zip(score_maps, geo_maps, orig_sizes):
+                                        map_margin = int(abs(orig_size[0] - orig_size[1]) * 0.5 * args.image_size / max(orig_size))
+
+                                        if orig_size[0] == orig_size[1]:
+                                            score_map, geo_map = score_map, geo_map
+                                        elif orig_size[0] > orig_size[1]:
+                                            score_map, geo_map = score_map[:, :, :-map_margin], geo_map[:, :, :-map_margin]
+                                        else:
+                                            score_map, geo_map = score_map[:, :-map_margin, :], geo_map[:, :-map_margin, :]
+
+                                        bboxes = get_bboxes(score_map, geo_map)
+                                        if bboxes is None:
+                                            bboxes = np.zeros((0, 4, 2), dtype=np.float32)
+                                        else:
+                                            bboxes = bboxes[:, :8].reshape(-1, 4, 2)
+                                            bboxes *= max(orig_size) / args.image_size
+
+                                        predict_box[temp]=bboxes
+                                        temp +=1
+                                    
+                                    batch_data = {
+                                        "gt_score_maps" : [],
+                                        "gt_geo_maps" : [],
+                                        "gt_roi_masks" : [],
+                                    }
+                                    batch, orig_sizes = [], []
+                                    pbar.update(1)
+                                    pbar.set_postfix(val_dict)
+                                
+                                    for key in val_dict:
+                                        val_average[key] += val_dict[key]
+                
+                    for key in val_average:
+                        val_average[key] = round(val_average[key]/val_num_batches,4)
+                    
+                    # calculrate validation f1 score
+                    metric = calc_deteval_metrics(predict_box,gt_box,transcriptions_dict)
+                    precision = metric['total']['precision']
+                    recall = metric['total']['recall']
+                    hmean = metric['total']['hmean']
+
+                    print('Eval Mean loss: {:.4f} | Elapsed time: {}'.format(
+                        val_loss/val_num_batches, timedelta(seconds=time.time() - val_start)))
+                    print(f'Eval score precision : {precision:.4f} | recall: {recall:.4f} | heman: {hmean:.4f}')
+
+                    wandb.log({
+                        'Precision' : precision,
+                        'Recall' : recall,
+                        'Hmean' : hmean
+                    })
+                    wandb.log(val_dict)        
 
         # val loss 기준으로 best loss 저장
         if val_epoch_loss.avg < best_val_loss:
@@ -248,23 +427,21 @@ def do_training(
 
         print(
             "> Val : Mean loss: {:.4f} | Best Val loss: {:.4f} | Elapsed time: {}".format(
-                val_epoch_loss.avg,
-                best_val_loss,
+                val_epoch_loss.avg, best_val_loss,
                 timedelta(seconds=time.time() - epoch_start),
             )
         )
         if counter > patience:
             print("Early Stopping!")
             break
+                
 
         best_loss.update(epoch, val_epoch_loss.avg, model.state_dict())
-
+        
         folder_epoch = set(os.listdir(model_dir))
         best_epoch = set(map(lambda x: str(x) + ".pth", list(best_loss.metric.keys())))
 
-        remove_epoch = list(
-            folder_epoch - best_epoch - set(["latest.pth"]) - set(["best.pth"])
-        )
+        remove_epoch = list(folder_epoch - best_epoch - set(["latest.pth"]) - set(["best.pth"]))
         add_epoch = list(best_epoch - folder_epoch)
 
         if remove_epoch:
@@ -275,26 +452,16 @@ def do_training(
                 best_loss.metric[int(add_epoch[0][:-4])]["state_dict"], ckpt_fpath
             )
 
-        ckpt_fpath = osp.join(model_dir, "latest.pth")
-        torch.save(model.state_dict(), ckpt_fpath)
-
         wandb.log(
             {
                 "Train Loss": train_epoch_loss.avg,
-                # "Train F1-Score": train_f1,
                 "Val Loss": val_epoch_loss.avg,
-                # "Val F1-Score": val_f1,
             }
         )
-
-
-def main(args):
-    start_time = time.time()
-    do_training(**args.__dict__)
     print(timedelta(seconds=time.time() - start_time))
 
-
 if __name__ == "__main__":
+    start_time = time.time()
     torch.cuda.empty_cache()
     args = parse_args()
-    main(args)
+    main(**args.__dict__)
