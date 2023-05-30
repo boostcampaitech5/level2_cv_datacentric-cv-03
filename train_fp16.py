@@ -62,8 +62,10 @@ def parse_args():
     parser.add_argument("--n_save", type=int, default=3)
     parser.add_argument("--split_num", type=int, default=0)
     parser.add_argument("--patience", type=int, default=10)
-    parser.add_argument("--interval", type=int, default=5)
+    parser.add_argument("--interval", type=int, default=10)
     parser.add_argument("--start_num", type=int, default=30)
+    parser.add_argument("--matrix_size", type=int, default=2)
+
 
 
     args = parser.parse_args()
@@ -134,6 +136,7 @@ def main(
     device,
     image_size,
     input_size,
+    matrix_size,
     num_workers,
     batch_size,
     learning_rate,
@@ -182,6 +185,7 @@ def main(
 
     val_dataset = EASTDataset(val_dataset)
     val_num_batches = math.ceil(len(val_dataset) / batch_size)
+    matrix_num_batches = math.ceil(len(val_dataset) / matrix_size)
     val_loader = DataLoader(
         val_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
     )
@@ -231,7 +235,7 @@ def main(
         _, val_list = split_list(all_imgs)
 
 
-    val_dataset_for_VAL = SceneTextDataset_VAL(
+    val_dataset_for_matrix = SceneTextDataset_VAL(
         args.data_dir,
         val_list,
         color_jitter=False,
@@ -322,7 +326,7 @@ def main(
                     transcriptions_dict = {}
 
                     with torch.no_grad():
-                        with tqdm(total=val_num_batches) as pbar:
+                        with tqdm(total=matrix_num_batches) as pbar:
                             batch_data = {
                                 "gt_score_maps" : [],
                                 "gt_geo_maps" : [],
@@ -331,7 +335,7 @@ def main(
                             batch, orig_sizes = [], []
                             temp = 0
                             
-                            for i,(img, word_bboxes, roi_mask) in enumerate(iter(val_dataset_for_VAL)):
+                            for i,(img, word_bboxes, roi_mask) in enumerate(iter(val_dataset_for_matrix)):
                                 # 배치만큼의 이미지를 넣는다
                                 orig_sizes.append(img.shape[:2])
                                 input_img= prep_fn(image=img)['image']
@@ -350,7 +354,7 @@ def main(
                                 batch_data['gt_geo_maps'].append(torch.Tensor(gt_geo_map).permute(2, 0, 1))
                                 batch_data['gt_roi_masks'].append(torch.Tensor(roi_mask).permute(2, 0, 1))
 
-                                if len(batch) == batch_size:
+                                if len(batch) == matrix_size:
                                     pbar.set_description('[Epoch {}]'.format(epoch + 1))
                                     batch = torch.stack(batch, dim=0).to(device)
                                     gt_score_maps = torch.stack(batch_data['gt_score_maps'],dim=0).to(device)
