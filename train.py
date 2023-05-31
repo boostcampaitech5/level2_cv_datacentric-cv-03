@@ -162,6 +162,7 @@ def main(
         config=args,
     )
 
+    pretrained_model_dir = osp.join(model_dir, pretrained)
     model_dir = osp.join(model_dir, exp_name)
     if not osp.exists(model_dir):
         os.makedirs(model_dir)
