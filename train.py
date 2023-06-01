@@ -64,6 +64,8 @@ def parse_args():
     parser.add_argument("--interval", type=int, default=10)
     parser.add_argument("--start_num", type=int, default=30)
     parser.add_argument("--matrix_size", type=int, default=2)
+    parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--pretrained", type=str, default="[tag]ExpName_V1")
 
 
     args = parser.parse_args()
@@ -146,7 +148,9 @@ def main(
     split_num,
     patience,
     interval,
-    start_num
+    start_num,
+    resume,
+    pretrained
 ):
     set_seed(seed)
 
@@ -158,6 +162,7 @@ def main(
         config=args,
     )
 
+    pretrained_model_dir = osp.join(model_dir, pretrained)
     model_dir = osp.join(model_dir, exp_name)
     if not osp.exists(model_dir):
         os.makedirs(model_dir)
@@ -190,6 +195,14 @@ def main(
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST()
+
+    if resume == "resume":
+        checkpoint = torch.load(osp.join(model_dir, "latest.pth"))
+        model.load_state_dict(checkpoint)
+    if resume == "finetuning":
+        checkpoint = torch.load(osp.join(pretrained_model_dir, "best.pth"))
+        model.load_state_dict(checkpoint)
+
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = lr_scheduler.MultiStepLR(
@@ -197,7 +210,6 @@ def main(
     )
 
     # early stopping
-    patience = patience
     counter = 0
     best_val_loss = np.inf
     
