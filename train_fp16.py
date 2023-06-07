@@ -23,6 +23,7 @@ import numpy as np
 import random
 import wandb
 import cv2
+from accelerate import Accelerator
 import json 
 import albumentations as A
 from albumentations.augmentations.geometric.resize import LongestMaxSize
@@ -64,8 +65,7 @@ def parse_args():
     parser.add_argument("--interval", type=int, default=10)
     parser.add_argument("--start_num", type=int, default=30)
     parser.add_argument("--matrix_size", type=int, default=2)
-    parser.add_argument("--resume", type=str, default=None)
-    parser.add_argument("--pretrained", type=str, default="[tag]ExpName_V1")
+
 
 
     args = parser.parse_args()
@@ -148,9 +148,7 @@ def main(
     split_num,
     patience,
     interval,
-    start_num,
-    resume,
-    pretrained
+    start_num
 ):
     set_seed(seed)
 
@@ -162,7 +160,6 @@ def main(
         config=args,
     )
 
-    pretrained_model_dir = osp.join(model_dir, pretrained)
     model_dir = osp.join(model_dir, exp_name)
     if not osp.exists(model_dir):
         os.makedirs(model_dir)
@@ -194,15 +191,9 @@ def main(
     )
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    accelerator = Accelerator(gradient_accumulation_steps=2)
+    device = accelerator.device
     model = EAST()
-
-    if resume == "resume":
-        checkpoint = torch.load(osp.join(model_dir, "latest.pth"))
-        model.load_state_dict(checkpoint)
-    if resume == "finetuning":
-        checkpoint = torch.load(osp.join(pretrained_model_dir, "best.pth"))
-        model.load_state_dict(checkpoint)
-
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = lr_scheduler.MultiStepLR(
@@ -210,6 +201,7 @@ def main(
     )
 
     # early stopping
+    patience = patience
     counter = 0
     best_val_loss = np.inf
     
@@ -259,24 +251,25 @@ def main(
             A.Normalize(), 
             ])
 
-
+    model, optimizer, train_loader, scheduler = accelerator.prepare(model, optimizer, train_loader, scheduler)
+    
     for epoch in range(max_epoch):
-
         # ======== train ========
         model.train()
         epoch_start = time.time()
         train_epoch_loss.reset()
-        with tqdm(total=train_num_batches) as pbar:
+        with tqdm(total=train_num_batches, disable=not accelerator.is_local_main_process) as pbar:
             for img, gt_score_map, gt_geo_map, roi_mask in train_loader:
                 pbar.set_description("[Epoch {}]".format(epoch + 1))
 
-                loss, extra_info = model.train_step(
+                with accelerator.accumulate(model):
+                    optimizer.zero_grad()
+                    loss, extra_info = model.train_step(
                     img, gt_score_map, gt_geo_map, roi_mask
-                )
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                    )
+                    
+                    accelerator.backward(loss)
+                    optimizer.step()
 
                 train_epoch_loss.update(loss.item())
 
@@ -288,9 +281,7 @@ def main(
                 }
                 pbar.set_postfix(train_dict)
                 wandb.log(train_dict)
-
         scheduler.step()
-
         print(
             "> Train : Mean loss: {:.4f} | Elapsed time: {}".format(
                 train_epoch_loss.avg,
@@ -298,7 +289,7 @@ def main(
             )
         )
 
-         # ======== val ========
+        # ======== val ========
         with torch.no_grad():
             model.eval()
             epoch_start = time.time()
@@ -335,7 +326,7 @@ def main(
                     transcriptions_dict = {}
 
                     with torch.no_grad():
-                        with tqdm(total = matrix_num_batches) as pbar:
+                        with tqdm(total=matrix_num_batches) as pbar:
                             batch_data = {
                                 "gt_score_maps" : [],
                                 "gt_geo_maps" : [],
@@ -351,6 +342,7 @@ def main(
                                 gt_score_map, gt_geo_map = generate_score_geo_maps(input_img, word_bboxes, map_scale=0.5)
                                 input_img = ToTensorV2()(image=input_img)['image']
                                 batch.append(input_img)
+                                
                                 gt_box[i]=word_bboxes
                                 transcriptions_dict[i] = ["1"]*len(word_bboxes)
                                 mask_size = int(args.image_size * 0.5), int(args.image_size * 0.5)
@@ -463,6 +455,12 @@ def main(
             torch.save(
                 best_loss.metric[int(add_epoch[0][:-4])]["state_dict"], ckpt_fpath
             )
+
+    #     ckpt_fpath = osp.join(model_dir, "latest.pth")
+    #     #-- 나중에 finetuning 할 때 문제 있으면 사용
+    #     # unwrapped_model = accelerator.unwrap_model(model)
+    #     # accelerator.save(unwrapped_model.state_dict(), ckpt_fpath)
+    #     torch.save(model.state_dict(), ckpt_fpath)
 
         wandb.log(
             {
