@@ -1,4 +1,4 @@
-# 🔡 OCR Date Centric 대회
+# 🔡 OCR Data-Centric 대회
 
 ## ✨ 팀 소개
 
@@ -49,7 +49,7 @@ This project follows the [all-contributors](https://github.com/all-contributors/
 
 OCR (Optimal Character Recognition) 기술은 사람이 직접 쓰거나 이미지 속에 있는 문자를 얻은 다음 이를 컴퓨터가 인식할 수 있도록 하는 기술입니다. 스마트폰으로 카드를 결제하거나, 카메라로 카드를 인식할 경우 자동으로 카드 번호가 입력되거나 주차장에 들어가면 차량 번호가 자동으로 인식되는 등 일상생활에 이미 보편적으로 사용되고 있습니다. 이번 대회는 OCR의 대표적인 model 중 하나인 EAST model을 활용하여 진료비 계산서 영수증안에 있는 글자를 인식하는 대회입니다. 
 
-이번 대회는  Data Centric 대회로 다음과 같은 제약사항이 있습니다. 
+이번 대회는  Data-Centric 대회로 다음과 같은 제약사항이 있습니다. 
 
 - 대회에서 주어지는 EAST model만을 사용해야 하며 model과 관련된 코드를 바꿔서는 안됩니다.
 - 이미지넷 기학습 가중치 외에는 사용이 불가합니다.
@@ -117,11 +117,11 @@ OCR (Optimal Character Recognition) 기술은 사람이 직접 쓰거나 이미�
     | COCO to UFO | COCO format으로 작성된 json file을 UFO format으로 변환합니다. |
     | UFO to COCO | UFO format으로 작성된 json file을 COCO format으로 변환합니다.  |
     | Erase exclude tags and Polygons  | 필요없는 tag와 polygon을 지웁니다.  |
-    | check | image를 체크합니다.  |
+    | check | Image에 대해 bbox가 어떻게 그려지는지 확인해보는 코드입니다.  |
     | preprocessing | 학습 가속화를 위해 image 데이터를 pickle로 바꿉니다.  |
-    | speed_up_loader | image를 pickle로 변경한 후 데이터 로딩 시간의 변화를 정리한 파일입니다.  |
+    | speed_up_loader | Image를 pickle로 변경한 후 데이터 로딩 시간의 변화를 정리한 파일입니다.  |
     | train_val_split | Train dataset과 Validation dataset으로 나눕니다.  |
-    | ensemble | wbf ensemble 코드입니다.  |
+    | ensemble | WBF ensemble 코드입니다.  |
     | wbf_ensemble | 기존 라이브러리 코드에서 하나의 모델만 예측한 bbox를 제거하는 코드를 추가한 ensemble 코드입니다.  |
 
 # 🤔 Wrap-Up Report
