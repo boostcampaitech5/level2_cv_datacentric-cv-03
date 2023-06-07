@@ -8,7 +8,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
 <tr>
 <td align="center"><a href="https://github.com/seungki1011"><img src="https://avatars.githubusercontent.com/u/120040458?v=4?s=100" width="100px;" alt=""/><br /><sub><b>김승기</b></sub><br />
 <a href="https://github.com/boostcampaitech5/level2_cv_datacentric-cv-03/commits?author=seungki1011" title="Code">💻</a>
-<a href="https://github.com/boostcampaitech5/level2_cv_datacentric-cv-03/tree/main/utils" title="Tool">🔧</a>
+<a href="https://github.com/boostcampaitech5/level2_cv_datacentric-cv-03/tree/master/utils" title="Tool">🔧</a>
 <a href="https://github.com/boostcampaitech5/level2_cv_datacentric-cv-03/issues" title="Bug">🐛</a>
 <a href="https://github.com/boostcampaitech5/level2_cv_datacentric-cv-03/pulls?q=is%3Apr+is%3Aclosed" title="Review">👀</a>
 </td>
@@ -22,7 +22,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
 <a href="https://github.com/boostcampaitech5/level2_cv_datacentric-cv-03/commits?author=helpmeIamnewbie" title="Code">💻</a>
 <a href="https://github.com/boostcampaitech5/level2_cv_datacentric-cv-03" title="Data">🔣</a>
 <a href="https://github.com/boostcampaitech5/level2_cv_datacentric-cv-03/pulls?q=is%3Apr+is%3Aclosed" title="Research">🔬</a>
-<a href="https://github.com/boostcampaitech5/level2_cv_datacentric-cv-03/tree/main/utils" title="Tool">🔧</a>
+<a href="https://github.com/boostcampaitech5/level2_cv_datacentric-cv-03/tree/master/utils" title="Tool">🔧</a>
 </td>
 <td align="center"><a href="https://github.com/CheonJiEun"><img src="https://avatars.githubusercontent.com/u/53997172?v=4?s=100" width="100px;" alt=""/><br /><sub><b>천지은</b></sub></a><br />
 <a href="https://github.com/boostcampaitech5/level2_cv_datacentric-cv-03/commits?author=CheonJiEun" title="Code">💻</a>
