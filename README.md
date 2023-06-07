@@ -56,7 +56,7 @@ OCR (Optimal Character Recognition) 기술은 사람이 직접 쓰거나 이미�
 
 즉 이번 대회는 모델을 고정한 상태로 데이터만을 활용하여 OCR model의 성능을 최대한 끌어 올리는 프로젝트 입니다. 
 
-이번 대회는 `부스트캠프 AI Tech` CV 트랙내에서 진행된 대회이며 f1-score로 최종평가를 진행하였습니다. 
+이번 대회는 `부스트캠프 AI Tech` CV 트랙내에서 진행된 대회이며 F1-Score로 최종평가를 진행하였습니다. 
 
 ## 📆 프로젝트 일정
 
@@ -67,10 +67,12 @@ OCR (Optimal Character Recognition) 기술은 사람이 직접 쓰거나 이미�
 프로젝트 세부 일정
 
 - 2023.05.22 ~ 2023.05.24 : OCR에 대해 알아보기, EDA
-- 2023.05.27 ~ 2023.05.28 : Augmentation 실험
-- 2023.05.29 ~ 2023.05.31 : Re-labeling, Pretrain용 Dataset 탐색
-- 2023.05.30 ~ 2023.05.31 : Optimizer & Scheduler 탐색
-- 2023.06.01 ~ 2023.06.01 :  Ensemble
+- 2023.05.25 ~ 2023.05.25 : Train dataset과 Validation dataset 분리, Validation 코드 추가
+- 2023.05.26 ~ 2023.05.28 : Mixed Precision, Pickle 파일로 학습시간 단축
+- 2023.05.27 ~ 2023.05.28 : Train/Test dataset 살펴보기, Re-labeling, Augmentation 실험
+- 2023.05.29 ~ 2023.05.31 : Re-labeling, Pretrain용 Dataset 탐색, wandb에 detEval 추가
+- 2023.05.30 ~ 2023.05.31 : Re-labeling, Optimizer & Scheduler 탐색
+- 2023.06.01 ~ 2023.06.01 : Ensemble
 
 ## 🥼 프로젝트 수행
 
@@ -100,18 +102,17 @@ OCR (Optimal Character Recognition) 기술은 사람이 직접 쓰거나 이미�
 ```
 ├── utils
 ├── .gitignore
-├── dataset.py
 ├── gitcommit_template.txt
+├── dataset.py
 ├── inference.py
 ├── train.py
 └── train_fp16.py
-
 ```
-
+- 베이스라인 모델인 EAST 모델이 정의되어 있는 `model.py`, `loss.py`, `east_dataset.py`, `detect.py` 파일은 변경하지 않았으므로 업로드하지 않았습니다.
 - 실험의 결과를 확인하기 위한 기능들, 성능을 더 올리기 위한 기능들은 `utils`폴더 안에 모두 구성했습니다.
     
     
-    | File(.ipynb) | Description |
+    | File(.ipynb/.py) | Description |
     | --- | --- |
     | COCO to UFO | COCO format으로 작성된 json file을 UFO format으로 변환합니다. |
     | UFO to COCO | UFO format으로 작성된 json file을 COCO format으로 변환합니다.  |
@@ -119,9 +120,9 @@ OCR (Optimal Character Recognition) 기술은 사람이 직접 쓰거나 이미�
     | check | image를 체크합니다.  |
     | preprocessing | 학습 가속화를 위해 image 데이터를 pickle로 바꿉니다.  |
     | speed_up_loader | image를 pickle로 변경한 후 데이터 로딩 시간의 변화를 정리한 파일입니다.  |
-    | train_val_split | train set과 validation set으로 나눕니다.  |
-    | ensemble | ensemble 코드입니다.  |
-    | wbf_ensemble | wbf ensemble 코드입니다.  |
+    | train_val_split | Train dataset과 Validation dataset으로 나눕니다.  |
+    | ensemble | wbf ensemble 코드입니다.  |
+    | wbf_ensemble | 기존 라이브러리 코드에서 하나의 모델만 예측한 bbox를 제거하는 코드를 추가한 ensemble 코드입니다.  |
 
 # 🤔 Wrap-Up Report
 
