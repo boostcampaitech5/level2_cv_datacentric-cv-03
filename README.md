@@ -78,11 +78,11 @@ OCR (Optimal Character Recognition) 기술은 사람이 직접 쓰거나 이미�
 
 ➡️ Link따라 들어가시면 보실 수 있습니다.
 
-1. [EDA](https://www.notion.so/EDA-076e97e382a2442aa041048f1ee0950c?pvs=21) 
-2. [Inferecne 분석 및 문제점 분석](https://www.notion.so/INFERENCE-e7827bc54b874372bc203a051e069ce5?pvs=21) 
-3. [Re-labeling](https://www.notion.so/Re-labeling-0f20a80e90fd423f836c7a213f653721?pvs=21)
-4. [Labeling Guidelines](https://www.notion.so/eb0db0b4d555417aafb7e116379b4447?pvs=21)
-5. [외부 데이터셋](https://www.notion.so/0d51b19cba3f47de81e0991caef79dd5?pvs=21) 
+1. [EDA](https://jjjuuuun.notion.site/EDA-076e97e382a2442aa041048f1ee0950c?pvs=4) 
+2. [Inferecne 분석 및 문제점 분석](https://jjjuuuun.notion.site/INFERENCE-e7827bc54b874372bc203a051e069ce5?pvs=4) 
+3. [Re-labeling](https://jjjuuuun.notion.site/Re-labeling-0f20a80e90fd423f836c7a213f653721?pvs=4)
+4. [Labeling Guidelines](https://jjjuuuun.notion.site/eb0db0b4d555417aafb7e116379b4447?pvs=4)
+5. [외부 데이터셋](https://jjjuuuun.notion.site/0d51b19cba3f47de81e0991caef79dd5?pvs=4) 
 6. [최종 발표자료](etc/presentation.pdf) 
 
 ## 🗒️ 프로젝트 결과
